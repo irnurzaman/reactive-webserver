@@ -13,8 +13,9 @@ from aiopg.sa import create_engine
 from handler import OrderHandler
 
 # Log configuration
-LOG_REQUEST_FORMAT = logging.Formatter('%(asctime)s|%(level)s|%(message)s')
+LOG_REQUEST_FORMAT = logging.Formatter('%(asctime)s|%(levelname)s|%(message)s')
 LOG_REQUEST_HANDLER = logging.FileHandler('request.log')
+LOG_REQUEST_HANDLER.setFormatter(LOG_REQUEST_FORMAT)
 
 class Webserver:
     def __init__(self):
