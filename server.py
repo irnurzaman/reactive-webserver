@@ -7,7 +7,7 @@ import rx.operators as ops
 from rx.subject import Subject
 from rx.scheduler.eventloop import AsyncIOScheduler
 from aiohttp import web
-from aiopg.sa import create_engine
+from aio_pika import connect_robust
 
 # Costum library
 from handler import OrderHandler
@@ -20,14 +20,15 @@ LOG_REQUEST_HANDLER.setFormatter(LOG_REQUEST_FORMAT)
 class Webserver:
     def __init__(self):
         self.app = web.Application()
-        self.dbEngine = None
-        self.loop = asyncio.get_event_loop()
-        self.requestLogger = logging.getLogger('request')
-        self.requestLogger.addHandler(LOG_REQUEST_HANDLER)
-        self.requestLogger.setLevel(logging.INFO)
         self.loop = asyncio.get_event_loop()
         self.request = Subject() # Requests observable object
         self.subscriptions = [] # List for containing disposable request observer
+        self.rmqConn = None
+        self.channel = {}
+        self.orderHandler = OrderHandler()
+        self.requestLogger = logging.getLogger('request')
+        self.requestLogger.addHandler(LOG_REQUEST_HANDLER)
+        self.requestLogger.setLevel(logging.INFO)
 
 
     def logRequest(self, request : web.Request):
@@ -38,6 +39,15 @@ class Webserver:
         future = asyncio.Future()
         request['future'] = future
         request['loop'] = self.loop
+
+        try:
+            body = await request.json()
+            request['body'] = body
+            request['queue'] = request.path.replace('/','')
+            request['channel'] = self.channel[request.path]
+        except Exception as e:
+            return web.json_response({'status':'FAIL', 'order_id': None, 'client_ref': None, 'reason':'Failed to parse request body'}, status=400)
+
         self.request.on_next(request) # Pass the request to the observers
 
         await future
@@ -46,19 +56,28 @@ class Webserver:
         return result
 
     async def on_shutdown(self, app: web.Application):
-        self.dbEngine.close()
+        await self.rmqConn.close()
         map(lambda i: i.dispose(), self.subscriptions)
-        await self.dbEngine.wait_closed()
 
 
     async def init(self):
-        self.dbEngine = await create_engine(user='reactive', password='reaction', database='reactive', host='localhost')
+        # Establish connection to RabbitMQ
+        self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
+
+        # Establish channel for order request and declare order queue
+        self.channel['/order'] = await self.rmqConn.channel()
+        await self.channel['/order'].declare_queue('order', durable=True)
+
+        # Establish channel for account request and declare account queue
+        self.channel['/account'] = await self.rmqConn.channel()
+        await self.channel['/account'].declare_queue('account', durable=True)
 
         # Create disposable request observer for handling order request. Only request to /order will be passed to OrderHandler
         dispose = self.request.pipe(
             ops.do_action(self.logRequest),
-            ops.filter(lambda i : i.path == '/order')
-        ).subscribe(OrderHandler(self.dbEngine), scheduler=AsyncIOScheduler)
+            ops.filter(lambda i : i.path == '/order'),
+            ops.filter(self.orderHandler.orderVerificator)
+        ).subscribe(self.orderHandler, scheduler=AsyncIOScheduler)
         self.subscriptions.append(dispose)
 
         self.app.router.add_post('/order', self.dispatcher, name='order')
