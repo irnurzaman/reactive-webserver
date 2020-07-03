@@ -14,7 +14,7 @@ class OrderHandler(Observer):
 
     def on_next(self, request: web.Request):
         loop = request['loop']
-        async def asyncOrder(request):
+        async def asyncOrder():
             future = request['future']
             body = request['body']
             channel = request['channel']
@@ -36,7 +36,7 @@ class OrderHandler(Observer):
 
             future.set_result(web.json_response({'status':'OK', 'order_id': orderId, 'client_ref':clientRef}))
 
-        loop.create_task(asyncOrder(request))
+        loop.create_task(asyncOrder())
 
     def orderVerificator(self, request: web.Request) -> bool:
         body = request['body']
