@@ -10,7 +10,7 @@ from aiohttp import web
 from aio_pika import connect_robust
 
 # Costum library
-from handler import OrderHandler
+from handler import OrderHandler, AccountHandler
 
 # Log configuration
 LOG_REQUEST_FORMAT = logging.Formatter('%(asctime)s|%(levelname)s|%(message)s')
@@ -26,6 +26,7 @@ class Webserver:
         self.rmqConn = None
         self.channel = {}
         self.orderHandler = OrderHandler()
+        self.accountHandler = AccountHandler()
         self.requestLogger = logging.getLogger('request')
         self.requestLogger.addHandler(LOG_REQUEST_HANDLER)
         self.requestLogger.setLevel(logging.INFO)
@@ -80,7 +81,16 @@ class Webserver:
         ).subscribe(self.orderHandler, scheduler=AsyncIOScheduler)
         self.subscriptions.append(dispose)
 
+        # Create disposable request observer for handling account request. Only request to /account will be passed to OrderHandler
+        dispose = self.request.pipe(
+            ops.filter(lambda i : i.path == '/account'),
+            ops.do_action(self.logRequest),
+            ops.filter(self.accountHandler.accountVerificator)
+        ).subscribe(self.accountHandler, scheduler=AsyncIOScheduler)
+        self.subscriptions.append(dispose)
+
         self.app.router.add_post('/order', self.dispatcher, name='order')
+        self.app.router.add_post('/account', self.dispatcher, name='account')
         self.app.on_shutdown.append(self.on_shutdown)
 
         return self.app

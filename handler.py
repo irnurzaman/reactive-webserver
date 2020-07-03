@@ -70,3 +70,65 @@ class OrderHandler(Observer):
                                                 status=422))
 
         return verified
+
+class AccountHandler(Observer):
+
+    def __init__(self):
+        super().__init__()
+
+    def on_next(self, request: web.Request):
+        loop = request['loop']
+        async def asyncAccount():
+            body = request['body']
+            future = request['future']
+            channel = request['channel']
+            queue = request['queue']
+
+            clientRef = body['client_ref']
+            account = body['account']
+            action = body['action']
+            amount = body['amount']
+            requestId = str(uuid4())[:8]
+
+            msg = f"{account}|{action}|{amount}"
+
+            msg = Message(msg.encode(), delivery_mode=DeliveryMode.PERSISTENT)
+
+            await channel.default_exchange.publish(msg, routing_key=queue)
+
+            future.set_result(web.json_response({'status':'OK', 'request_id': requestId, 'client_ref':clientRef}))
+
+        loop.create_task(asyncAccount())
+
+    def accountVerificator(self, request: web.Request) -> bool:
+        body = request['body']
+        future = request['future']
+        verified = True
+
+        paramsExpect = ('client_ref', 'account', 'action', 'amount')
+
+        paramsMissing = list(filter(lambda i: i not in body, paramsExpect))
+
+        if len(paramsMissing) > 0:
+            body['verified'] = False
+            future.set_result(web.json_response({'status':'FAIL', 'request_id': None, 'client_ref': None, 'reason':f"Missing parameter {', '.join(paramsMissing)}"},
+                                                status=422))
+            return False
+
+        if body['action'] not in ('DEPOSIT', 'WITHDRAW'):
+            verified = False
+            reason = 'Action must be DEPOSIT or WITHDRAW'
+
+        if not isinstance(body['amount'], int):
+            verified = False
+            reason = 'Amount must be integer'
+
+        elif body['amount'] <= 0 :
+            verified = False
+            reason = 'Amount must be > 0'
+
+        if not verified:
+            future.set_result(web.json_response({'status':'FAIL', 'request_id': None, 'client_ref': body['client_ref'], 'reason': reason},
+                                                status=422))
+
+        return verified
