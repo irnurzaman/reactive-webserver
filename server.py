@@ -74,8 +74,8 @@ class Webserver:
 
         # Create disposable request observer for handling order request. Only request to /order will be passed to OrderHandler
         dispose = self.request.pipe(
-            ops.do_action(self.logRequest),
             ops.filter(lambda i : i.path == '/order'),
+            ops.do_action(self.logRequest),
             ops.filter(self.orderHandler.orderVerificator)
         ).subscribe(self.orderHandler, scheduler=AsyncIOScheduler)
         self.subscriptions.append(dispose)
