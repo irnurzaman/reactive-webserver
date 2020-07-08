@@ -83,18 +83,18 @@ class AccountServices:
         account = data['account']
         amount = data['amount']
 
-        rawSql = 'SELECT balance + balance_hold >= %s validation from accounts where account_no = %s'
+        rawSql = 'UPDATE accounts set balance = balance - %s, balance_hold = balance_hold + %s where account_no = %s and balance + balance_hold >= %s RETURNING true validation;'
 
         validation = 'BAD'
         async with self.dbEngine.acquire() as dbConn:
-            async for row in dbConn.execute(rawSql, (amount, account)):
+            async for row in dbConn.execute(rawSql, (amount, amount, account, amount)):
                 row = dict(row)
                 validation = 'OK' if row['validation'] else validation
 
         return web.HTTPOk(text=validation)
 
     def run(self):
-        web.run_app(self.initializer())
+        web.run_app(self.initializer(), port=8001)
 
 if __name__ == '__main__':
     accountService = AccountServices()
