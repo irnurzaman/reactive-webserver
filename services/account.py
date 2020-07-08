@@ -55,17 +55,17 @@ class AccountServices:
         self.accountQueue = await self.rmqChannel.declare_queue('account', durable=True)
         self.disposable = self.messages.pipe(ops.map(self.messageProcessor)).subscribe(self.observer, scheduler=AsyncIOScheduler)
 
+        self.app.router.add_get('/order', self.orderValidator, name='order')
+        self.loop.create_task(self.rmqListener())
+
+        return self.app
+
     async def rmqListener(self):
         # Dispatch the consumed message to observer
         await self.accountQueue.consume(self.dispatchMessage)
 
-    def run(self):
-        async def asyncRun():
-            await self.initializer()
-            await self.rmqListener()
-
-        self.loop.create_task(asyncRun())
-        self.loop.run_forever()
+    def dispatchMessage(self, msg: IncomingMessage):
+        self.messages.on_next(msg)
 
     def messageProcessor(self, message: IncomingMessage) -> Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]:
         # Transform message into dictionary and pass object message for acknowledgement, DB engine, and asyncio loop to observer
@@ -77,8 +77,24 @@ class AccountServices:
 
         return (message, self.dbEngine, data, self.loop)
 
-    def dispatchMessage(self, msg: IncomingMessage):
-        self.messages.on_next(msg)
+    async def orderValidator(self, request: web.Request) -> web.Response:
+        data = await request.json()
+
+        account = data['account']
+        amount = data['amount']
+
+        rawSql = 'SELECT balance + balance_hold >= %s validation from accounts where account_no = %s'
+
+        validation = 'BAD'
+        async with self.dbEngine.acquire() as dbConn:
+            async for row in dbConn.execute(rawSql, (amount, account)):
+                row = dict(row)
+                validation = 'OK' if row['validation'] else validation
+
+        return web.HTTPOk(text=validation)
+
+    def run(self):
+        web.run_app(self.initializer())
 
 if __name__ == '__main__':
     accountService = AccountServices()
