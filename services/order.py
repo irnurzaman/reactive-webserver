@@ -13,8 +13,6 @@ class OrderHandler(Observer):
 
     def __init__(self):
         super().__init__()
-        self.rawSql = {'DEPOSIT': 'UPDATE accounts set balance = balance + %s where account_no = %s',
-                       'WITHDRAW': 'UPDATE accounts set balance = balance - %s where account_no = %s'}
 
     def on_next(self, message: Tuple[IncomingMessage, core.AgnosticCollection, dict, asyncio.AbstractEventLoop]):
         loop = message[3]
@@ -23,12 +21,49 @@ class OrderHandler(Observer):
             collection = message[1]
             order = message[2]
 
-            # TODO : order matching logic here
+            await self.matchOrder(order, collection)
 
             qmsg.ack()
 
         loop.create_task(asyncOrder())
 
+    async def matchOrder(self, order, collection):
+
+            dictFilter = {'price': {'$lte':order['price']}} if order['action'] == 'BUY' else {'price': {'$gte':order['price']}}
+            dictFilter.update({'action': 'BUY' if order['action'] == 'SELL' else 'SELL',
+                               'stock': order['stock'],
+                               'selected': False,
+                               'status': {'$ne': '2'}})
+            dictSort = {'price': 1 if order['action'] == 'BUY' else -1,
+                        'timestamp': 1}
+
+            orderContra = await collection.find_one_and_update(dictFilter,
+                                                               {'$set':{'selected': True}},
+                                                               sort=list(dictSort.items()),
+                                                               return_document=True)
+
+            while orderContra is not None and order['status'] != '2':
+                leaveVol = order['vol'] - order['cumVol']
+                contraLeaveVol = orderContra['vol'] - orderContra['cumVol']
+                matchVol = contraLeaveVol if contraLeaveVol <= leaveVol else leaveVol
+                contraMatchVol = leaveVol if leaveVol <= contraLeaveVol else contraLeaveVol
+                order['cumVol'] += matchVol
+                orderContra['cumVol'] += contraMatchVol
+                order['status'] = '2' if order['cumVol'] == order['vol'] else '1'
+                orderContra['status'] = '2' if orderContra['cumVol'] == orderContra['vol'] else '1'
+
+                await collection.find_one_and_update({'orderId': order['orderId']},
+                                                     {'$set': {'cumVol': order['cumVol'],
+                                                               'status': order['status']}})
+                await collection.find_one_and_update({'orderId': orderContra['orderId']},
+                                                     {'$set': {'cumVol': orderContra['cumVol'],
+                                                               'status': orderContra['status'],
+                                                               'selected': False}})
+
+                orderContra = await collection.find_one_and_update(dictFilter,{'$set':{'selected': True}},sort=list(dictSort.items()), return_document=True)
+
+            await collection.find_one_and_update({'orderId': order['orderId']},
+                                                 {'$set': {'selected': False}})
 
 class OrderServices:
     def __init__(self):
@@ -71,8 +106,9 @@ class OrderServices:
                  'stock': order[0],
                  'price': int(order[1]),
                  'vol': int(order[2]),
-                 'matchVol': 0,
-                 'status': '0'}
+                 'cumVol': 0,
+                 'status': '0',
+                 'selected': False}
 
         params = {'account': account if action == 'BUY' else f"{account}.{order['stock']}",
                   'amount': order['price'] * order['vol'] if action == 'BUY' else order['vol']}
