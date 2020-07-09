@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from typing import Tuple
 from aiohttp import ClientSession
 from motor import motor_asyncio, core
@@ -57,11 +58,14 @@ class OrderServices:
 
     async def orderValidation(self, msg: IncomingMessage):
         data = msg.body.decode()
+        now = datetime.now()
+        now = now.strftime('%Y-%m-%d %H:%M:%S')
         data = data.split('|')
         account = data[0]
         action = data[1]
         order = data[2].split('.')
         order = {'orderId': order[3],
+                 'timestamp': now,
                  'account': account,
                  'action': action,
                  'stock': order[0],
