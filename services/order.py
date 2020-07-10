@@ -11,11 +11,13 @@ from rx.scheduler.eventloop import AsyncIOScheduler
 
 class OrderMatcher(Observer):
 
-    def __init__(self):
+    def __init__(self, loop: asyncio.AbstractEventLoop, collection: core.AgnosticCollection):
         super().__init__()
+        self.loop = loop
+        self.collection = collection
+        self.tradeNotif = Subject()
 
-    def on_next(self, message: Tuple[IncomingMessage, core.AgnosticCollection, dict, asyncio.AbstractEventLoop]):
-        loop = message[3]
+    def on_next(self, message: Tuple[IncomingMessage, dict]):
         async def asyncOrder():
             qmsg = message[0]
             collection = message[1]
@@ -25,7 +27,7 @@ class OrderMatcher(Observer):
 
             qmsg.ack()
 
-        loop.create_task(asyncOrder())
+        self.loop.create_task(asyncOrder())
 
     async def matchOrder(self, order, collection):
 
@@ -37,7 +39,7 @@ class OrderMatcher(Observer):
             dictSort = {'price': 1 if order['action'] == 'BUY' else -1,
                         'timestamp': 1}
 
-            orderContra = await collection.find_one_and_update(dictFilter,
+            orderContra = await self.collection.find_one_and_update(dictFilter,
                                                                {'$set':{'selected': True}},
                                                                sort=list(dictSort.items()),
                                                                return_document=True)
@@ -52,17 +54,24 @@ class OrderMatcher(Observer):
                 order['status'] = '2' if order['cumVol'] == order['vol'] else '1'
                 orderContra['status'] = '2' if orderContra['cumVol'] == orderContra['vol'] else '1'
 
-                await collection.find_one_and_update({'orderId': order['orderId']},
+                await self.collection.find_one_and_update({'orderId': order['orderId']},
                                                      {'$set': {'cumVol': order['cumVol'],
                                                                'status': order['status']}})
-                await collection.find_one_and_update({'orderId': orderContra['orderId']},
+                tradeInit = {'action': order['action'], 'account': order['account'], 'stock':order['stock'],
+                             'price':order['price'], 'vol': matchVol}
+                self.tradeNotif.on_next(tradeInit)
+
+                await self.collection.find_one_and_update({'orderId': orderContra['orderId']},
                                                      {'$set': {'cumVol': orderContra['cumVol'],
                                                                'status': orderContra['status'],
                                                                'selected': False}})
+                tradeContra = {'action': orderContra['action'], 'account': orderContra['account'], 'stock': orderContra['stock'],
+                             'price': orderContra['price'], 'vol': contraMatchVol}
+                self.tradeNotif.on_next(tradeContra)
 
-                orderContra = await collection.find_one_and_update(dictFilter,{'$set':{'selected': True}},sort=list(dictSort.items()), return_document=True)
+                orderContra = await self.collection.find_one_and_update(dictFilter,{'$set':{'selected': True}},sort=list(dictSort.items()), return_document=True)
 
-            await collection.find_one_and_update({'orderId': order['orderId']},
+            await self.collection.find_one_and_update({'orderId': order['orderId']},
                                                  {'$set': {'selected': False}})
 
 class OrderServices:
@@ -70,7 +79,6 @@ class OrderServices:
         self.webservice = ClientSession()
         self.loop = asyncio.get_event_loop()
         self.messages = Subject()
-        self.orderMatcher = OrderMatcher()
         self.disposable = None
         self.orderCollection = None
         self.rmqConn = None
@@ -83,7 +91,7 @@ class OrderServices:
         self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
         self.rmqChannel = await self.rmqConn.channel()
         self.orderQueue = await self.rmqChannel.declare_queue('order', durable=True)
-        self.disposable = self.messages.subscribe(self.orderMatcher, scheduler=AsyncIOScheduler)
+        self.disposable = self.messages.subscribe(OrderMatcher(self.loop, self.orderCollection), scheduler=AsyncIOScheduler)
 
         self.loop.create_task(self.rmqListener())
 
@@ -117,7 +125,7 @@ class OrderServices:
             valid = await resp.text()
             if valid == 'OK':
                 await self.orderCollection.insert_one(order)
-                self.messages.on_next((msg, self.orderCollection, order, self.loop))
+                self.messages.on_next((msg, order))
             else:
                 order['status'] = 'R'
                 await self.orderCollection.insert_one(order)
