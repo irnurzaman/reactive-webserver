@@ -13,11 +13,18 @@ class AccountHandler(Observer):
 
     def __init__(self):
         super().__init__()
-        self.rawSql = {'DEPOSIT': 'UPDATE accounts set balance = balance + %s where account_no = %s',
-                       'WITHDRAW': 'UPDATE accounts set balance = balance - %s where account_no = %s'}
+        self.rawSql = {'DEPOSIT': 'UPDATE accounts SET balance = balance + %s WHERE account_no = %s',
+                       'WITHDRAW': 'UPDATE accounts SET balance = balance - %s WHERE account_no = %s',
+                       'TRADE-BUY': """UPDATE accounts SET balance_hold = balance_hold + %s WHERE account_no = %s;
+                                        INSERT INTO accounts VALUES (%s, %s, 0)
+                                        ON CONFLICT (account_no)
+                                        DO UPDATE SET balance = accounts.balance + %s WHERE accounts.account_no = %s;"""}
 
         self.params = {'DEPOSIT': lambda i: (i['amount'], i['account']),
-                       'WITHDRAW': lambda i: (i['amount'], i['account'])}
+                       'WITHDRAW': lambda i: (i['amount'], i['account']),
+                       'TRADE-BUY': lambda i: (i['vol']*i['price'], i['account'],
+                                               f"{i['account']}.{i['stock']}", i['vol'],
+                                               i['vol'], f"{i['account']}.{i['stock']}")}
 
     def on_next(self, message: Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]):
         loop = message[3]
