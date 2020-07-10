@@ -29,7 +29,7 @@ class AccountHandler(Observer):
             params = data['params']
 
             async with dbEngine.acquire() as dbConn:
-                await dbConn.execute(self.rawSql[action], self.params['action'](params))
+                await dbConn.execute(self.rawSql[action], self.params[action](params))
 
             qmsg.ack()
 
