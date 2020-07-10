@@ -83,7 +83,7 @@ class AccountServices:
         account = data['account']
         amount = data['amount']
 
-        rawSql = 'UPDATE accounts set balance = balance - %s, balance_hold = balance_hold + %s where account_no = %s and balance + balance_hold >= %s RETURNING true validation;'
+        rawSql = 'UPDATE accounts SET balance = balance - %s, balance_hold = balance_hold - %s WHERE account_no = %s and balance + balance_hold >= %s RETURNING true validation;'
 
         validation = 'BAD'
         async with self.dbEngine.acquire() as dbConn:
