@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Tuple
 from aiohttp import web
 from aiopg.sa import create_engine, Engine
@@ -15,6 +16,9 @@ class AccountHandler(Observer):
         self.rawSql = {'DEPOSIT': 'UPDATE accounts set balance = balance + %s where account_no = %s',
                        'WITHDRAW': 'UPDATE accounts set balance = balance - %s where account_no = %s'}
 
+        self.params = {'DEPOSIT': lambda i: (i['amount'], i['account']),
+                       'WITHDRAW': lambda i: (i['amount'], i['account'])}
+
     def on_next(self, message: Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]):
         loop = message[3]
         async def asyncAccount():
@@ -22,11 +26,10 @@ class AccountHandler(Observer):
             dbEngine = message[1]
             data = message[2]
             action = data['action']
-            account = data['account']
-            amount = data['amount']
+            params = data['params']
 
             async with dbEngine.acquire() as dbConn:
-                await dbConn.execute(self.rawSql[action], (amount, account))
+                await dbConn.execute(self.rawSql[action], self.params['action'](params))
 
             qmsg.ack()
 
@@ -70,10 +73,7 @@ class AccountServices:
     def messageProcessor(self, message: IncomingMessage) -> Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]:
         # Transform message into dictionary and pass object message for acknowledgement, DB engine, and asyncio loop to observer
         data = message.body.decode()
-        data = data.split('|')
-        data = {'account': data[0],
-                'action': data[1],
-                'amount': data[2]}
+        data = json.loads(data)
 
         return (message, self.dbEngine, data, self.loop)
 

@@ -1,4 +1,5 @@
 # Built-in library
+import json
 from uuid import uuid4
 
 # Third-party libray
@@ -90,7 +91,7 @@ class AccountHandler(Observer):
             amount = body['amount']
             requestId = str(uuid4())[:8]
 
-            msg = f"{account}|{action}|{amount}"
+            msg = json.dumps({'action':action, 'params':{'account':account, 'amount':amount}})
 
             msg = Message(msg.encode(), delivery_mode=DeliveryMode.PERSISTENT)
 
