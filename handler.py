@@ -106,7 +106,7 @@ class AccountHandler(Observer):
         future = request['future']
         verified = True
 
-        paramsExpect = ('client_ref', 'account', 'action', 'params')
+        paramsExpect = ('client_ref', 'action', 'params')
 
         paramsMissing = list(filter(lambda i: i not in body, paramsExpect))
 
