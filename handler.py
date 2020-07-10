@@ -86,9 +86,9 @@ class AccountHandler(Observer):
             queue = request['queue']
 
             clientRef = body['client_ref']
-            account = body['account']
             action = body['action']
-            amount = body['amount']
+            account = body['params']['account']
+            amount = body['params']['amount']
             requestId = str(uuid4())[:8]
 
             msg = json.dumps({'action':action, 'params':{'account':account, 'amount':amount}})
