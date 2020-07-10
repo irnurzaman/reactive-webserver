@@ -106,27 +106,36 @@ class AccountHandler(Observer):
         future = request['future']
         verified = True
 
-        paramsExpect = ('client_ref', 'account', 'action', 'amount')
+        paramsExpect = ('client_ref', 'account', 'action', 'params')
 
         paramsMissing = list(filter(lambda i: i not in body, paramsExpect))
 
         if len(paramsMissing) > 0:
-            body['verified'] = False
-            future.set_result(web.json_response({'status':'FAIL', 'request_id': None, 'client_ref': None, 'reason':f"Missing parameter {', '.join(paramsMissing)}"},
+            future.set_result(web.json_response({'status':'FAIL', 'request_id': None, 'client_ref': None,
+                                                 'reason':f"Missing parameter {', '.join(paramsMissing)}"},
                                                 status=422))
+            return False
+
+        if not isinstance(body['params'], dict):
+            future.set_result(web.json_response({'status': 'FAIL', 'request_id': None, 'client_ref': None,
+                                                 'reason': f"params field is not an object"}, status=422))
             return False
 
         if body['action'] not in ('DEPOSIT', 'WITHDRAW'):
             verified = False
             reason = 'Action must be DEPOSIT or WITHDRAW'
 
-        if not isinstance(body['amount'], int):
+        if not isinstance(body['params'].get('amount'), int):
             verified = False
             reason = 'Amount must be integer'
 
-        elif body['amount'] <= 0 :
+        elif body['params']['amount'] <= 0 :
             verified = False
             reason = 'Amount must be > 0'
+
+        if body['params'].get('account') is None:
+            verified = False
+            reason = 'Missing account parameter'
 
         if not verified:
             future.set_result(web.json_response({'status':'FAIL', 'request_id': None, 'client_ref': body['client_ref'], 'reason': reason},
