@@ -9,7 +9,7 @@ from rx.subject import Subject
 from rx.core import Observer
 from rx.scheduler.eventloop import AsyncIOScheduler
 
-class OrderHandler(Observer):
+class OrderMatcher(Observer):
 
     def __init__(self):
         super().__init__()
@@ -70,7 +70,7 @@ class OrderServices:
         self.webservice = ClientSession()
         self.loop = asyncio.get_event_loop()
         self.messages = Subject()
-        self.observer = OrderHandler()
+        self.orderMatcher = OrderMatcher()
         self.disposable = None
         self.orderCollection = None
         self.rmqConn = None
@@ -83,7 +83,7 @@ class OrderServices:
         self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
         self.rmqChannel = await self.rmqConn.channel()
         self.orderQueue = await self.rmqChannel.declare_queue('order', durable=True)
-        self.disposable = self.messages.subscribe(self.observer, scheduler=AsyncIOScheduler)
+        self.disposable = self.messages.subscribe(self.orderMatcher, scheduler=AsyncIOScheduler)
 
         self.loop.create_task(self.rmqListener())
 
