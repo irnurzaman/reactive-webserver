@@ -1,41 +1,42 @@
 import asyncio
+import json
 from datetime import datetime
 from typing import Tuple
 from aiohttp import ClientSession
 from motor import motor_asyncio, core
-from aio_pika import connect_robust, IncomingMessage
-import rx.operators as ops
+from aio_pika import connect_robust, IncomingMessage, Message, DeliveryMode, RobustChannel
 from rx.subject import Subject
 from rx.core import Observer
 from rx.scheduler.eventloop import AsyncIOScheduler
 
 class OrderMatcher(Observer):
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, collection: core.AgnosticCollection):
+    def __init__(self, loop: asyncio.AbstractEventLoop, collection: core.AgnosticCollection, channel: RobustChannel):
         super().__init__()
         self.loop = loop
         self.collection = collection
+        self.channel = channel
         self.tradeNotif = Subject()
+        self.tradeNotifier = self.tradeNotif.subscribe(TradeNotifier(self.loop, self.channel))
 
     def on_next(self, message: Tuple[IncomingMessage, dict]):
         async def asyncOrder():
             qmsg = message[0]
-            collection = message[1]
-            order = message[2]
+            order = message[1]
 
-            await self.matchOrder(order, collection)
+            await self.matchOrder(order)
 
             qmsg.ack()
 
         self.loop.create_task(asyncOrder())
 
-    async def matchOrder(self, order, collection):
+    async def matchOrder(self, order):
 
             dictFilter = {'price': {'$lte':order['price']}} if order['action'] == 'BUY' else {'price': {'$gte':order['price']}}
             dictFilter.update({'action': 'BUY' if order['action'] == 'SELL' else 'SELL',
                                'stock': order['stock'],
                                'selected': False,
-                               'status': {'$ne': '2'}})
+                               'status': {'$nin': ['2','R']}})
             dictSort = {'price': 1 if order['action'] == 'BUY' else -1,
                         'timestamp': 1}
 
@@ -74,6 +75,21 @@ class OrderMatcher(Observer):
             await self.collection.find_one_and_update({'orderId': order['orderId']},
                                                  {'$set': {'selected': False}})
 
+class TradeNotifier(Observer):
+    def __init__(self, loop: asyncio.AbstractEventLoop, channel: RobustChannel):
+        super().__init__()
+        self.loop = loop
+        self.channel = channel
+
+    def on_next(self, data: dict):
+
+        async def asyncTrade():
+            msg = json.dumps({'action': f"TRADE-{data['action']}", 'params': data})
+            msg = Message(msg.encode(), delivery_mode=DeliveryMode.PERSISTENT)
+            await self.channel.default_exchange.publish(msg, routing_key='account')
+
+        self.loop.create_task(asyncTrade())
+
 class OrderServices:
     def __init__(self):
         self.webservice = ClientSession()
@@ -91,7 +107,7 @@ class OrderServices:
         self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
         self.rmqChannel = await self.rmqConn.channel()
         self.orderQueue = await self.rmqChannel.declare_queue('order', durable=True)
-        self.disposable = self.messages.subscribe(OrderMatcher(self.loop, self.orderCollection), scheduler=AsyncIOScheduler)
+        self.disposable = self.messages.subscribe(OrderMatcher(self.loop, self.orderCollection, self.rmqChannel), scheduler=AsyncIOScheduler)
 
         self.loop.create_task(self.rmqListener())
 
