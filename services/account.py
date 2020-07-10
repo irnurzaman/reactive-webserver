@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Tuple
 from aiohttp import web
 from aiopg.sa import create_engine, Engine
@@ -12,8 +13,22 @@ class AccountHandler(Observer):
 
     def __init__(self):
         super().__init__()
-        self.rawSql = {'DEPOSIT': 'UPDATE accounts set balance = balance + %s where account_no = %s',
-                       'WITHDRAW': 'UPDATE accounts set balance = balance - %s where account_no = %s'}
+        self.rawSql = {'DEPOSIT': 'UPDATE accounts SET balance = balance + %s WHERE account_no = %s',
+                       'WITHDRAW': 'UPDATE accounts SET balance = balance - %s WHERE account_no = %s',
+                       'TRADE-BUY': """UPDATE accounts SET balance_hold = balance_hold + %s WHERE account_no = %s;
+                                        INSERT INTO accounts VALUES (%s, %s, 0)
+                                        ON CONFLICT (account_no)
+                                        DO UPDATE SET balance = accounts.balance + %s WHERE accounts.account_no = %s;""",
+                       'TRADE-SELL': """UPDATE accounts SET balance_hold = balance_hold + %s WHERE account_no = %s;
+                                        UPDATE accounts SET balance = balance + %s WHERE account_no = %s;"""}
+
+        self.params = {'DEPOSIT': lambda i: (i['amount'], i['account']),
+                       'WITHDRAW': lambda i: (i['amount'], i['account']),
+                       'TRADE-BUY': lambda i: (i['vol']*i['price'], i['account'],
+                                               f"{i['account']}.{i['stock']}", i['vol'],
+                                               i['vol'], f"{i['account']}.{i['stock']}"),
+                       'TRADE-SELL': lambda i: (i['vol'], f"{i['account']}.{i['stock']}",
+                                               i['vol']*i['price'], i['account'])}
 
     def on_next(self, message: Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]):
         loop = message[3]
@@ -22,11 +37,10 @@ class AccountHandler(Observer):
             dbEngine = message[1]
             data = message[2]
             action = data['action']
-            account = data['account']
-            amount = data['amount']
+            params = data['params']
 
             async with dbEngine.acquire() as dbConn:
-                await dbConn.execute(self.rawSql[action], (amount, account))
+                await dbConn.execute(self.rawSql[action], self.params[action](params))
 
             qmsg.ack()
 
@@ -70,10 +84,7 @@ class AccountServices:
     def messageProcessor(self, message: IncomingMessage) -> Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]:
         # Transform message into dictionary and pass object message for acknowledgement, DB engine, and asyncio loop to observer
         data = message.body.decode()
-        data = data.split('|')
-        data = {'account': data[0],
-                'action': data[1],
-                'amount': data[2]}
+        data = json.loads(data)
 
         return (message, self.dbEngine, data, self.loop)
 
@@ -83,7 +94,7 @@ class AccountServices:
         account = data['account']
         amount = data['amount']
 
-        rawSql = 'UPDATE accounts set balance = balance - %s, balance_hold = balance_hold + %s where account_no = %s and balance + balance_hold >= %s RETURNING true validation;'
+        rawSql = 'UPDATE accounts SET balance = balance - %s, balance_hold = balance_hold - %s WHERE account_no = %s and balance + balance_hold >= %s RETURNING true validation;'
 
         validation = 'BAD'
         async with self.dbEngine.acquire() as dbConn:
