@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Tuple
-from aiohttp import ClientSession
+from aiohttp import web, ClientSession
 from motor import motor_asyncio, core
 from aio_pika import connect_robust, IncomingMessage, Message, DeliveryMode, RobustChannel
 from rx.subject import Subject
@@ -97,6 +97,7 @@ class TradeNotifier(Observer):
 
 class OrderServices:
     def __init__(self):
+        self.app = web.Application()
         self.webservice = ClientSession()
         self.loop = asyncio.get_event_loop()
         self.messages = Subject()
@@ -120,6 +121,22 @@ class OrderServices:
 
         # Start listening to order events from RabbitMQ
         self.loop.create_task(self.rmqListener())
+
+        # Setup router for order API
+        self.app.router.add_get('/orders/{account}', self.orderQuery, name='orders')
+
+        return self.app
+
+    # order API handler for handling order query
+    async def orderQuery(self, request: web.Request):
+        account = request.match_info['account']
+        orders = []
+        async for doc in self.orderCollection.find({'account': account}).sort('timestamp', -1):
+            doc.pop('_id', None)
+            doc.pop('selected', None)
+            orders.append(doc)
+
+        return web.json_response({'results': orders})
 
     async def rmqListener(self):
         # Dispatch the consumed message to observer
@@ -160,12 +177,7 @@ class OrderServices:
                 msg.ack()
 
     def run(self):
-        async def asyncRun():
-            await self.initializer()
-            await self.rmqListener()
-
-        self.loop.create_task(asyncRun())
-        self.loop.run_forever()
+        web.run_app(self.initializer(), port=8002)
 
 if __name__ == '__main__':
     orderService = OrderServices()
