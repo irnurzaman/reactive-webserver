@@ -6,7 +6,7 @@ import logging
 import rx.operators as ops
 from rx.subject import Subject
 from rx.scheduler.eventloop import AsyncIOScheduler
-from aiohttp import web
+from aiohttp import web, ClientSession
 from aio_pika import connect_robust
 
 # Costum library
@@ -20,6 +20,7 @@ LOG_REQUEST_HANDLER.setFormatter(LOG_REQUEST_FORMAT)
 class Webserver:
     def __init__(self):
         self.app = web.Application()
+        self.webservice = ClientSession()
         self.loop = asyncio.get_event_loop()
         self.request = Subject() # Requests observable object
         self.subscriptions = [] # List for containing disposable request observer
@@ -56,6 +57,24 @@ class Webserver:
 
         return result
 
+    async def accountQuery(self, request: web.Request) -> web.Response:
+        account = request.match_info['account']
+
+        response = {'results': []}
+        async with self.webservice.get(f'http://localhost:8001/accounts/{account}') as resp:
+            response = await resp.json()
+
+        return web.json_response(response)
+
+    async def orderQuery(self, request: web.Request) -> web.Response:
+        account = request.match_info['account']
+
+        response = {'results': []}
+        async with self.webservice.get(f'http://localhost:8002/orders/{account}') as resp:
+            response = await resp.json()
+
+        return web.json_response(response)
+
     async def on_shutdown(self, app: web.Application):
         await self.rmqConn.close()
         map(lambda i: i.dispose(), self.subscriptions)
@@ -90,7 +109,9 @@ class Webserver:
         self.subscriptions.append(dispose)
 
         self.app.router.add_post('/order', self.dispatcher, name='order')
+        self.app.router.add_get('/orders/{account}', self.orderQuery)
         self.app.router.add_post('/account', self.dispatcher, name='account')
+        self.app.router.add_get('/accounts/{account}', self.accountQuery)
         self.app.on_shutdown.append(self.on_shutdown)
 
         return self.app
