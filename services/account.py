@@ -9,6 +9,8 @@ from rx.subject import Subject
 from rx.core import Observer
 from rx.scheduler.eventloop import AsyncIOScheduler
 
+
+# Observer for handling incoming account events
 class AccountHandler(Observer):
 
     def __init__(self):
