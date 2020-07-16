@@ -59,16 +59,19 @@ class AccountServices:
         self.rmqChannel = None
 
     async def initializer(self):
+        # Creates  a connection to PostgreSQL database
         self.dbEngine = await create_engine(user='reactive',
                                             password='reaction',
                                             host='localhost',
                                             database='reactive')
 
+        # Creates a connection RabbitMQ
         self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
         self.rmqChannel = await self.rmqConn.channel()
         self.accountQueue = await self.rmqChannel.declare_queue('account', durable=True)
         self.disposable = self.messages.pipe(ops.map(self.messageProcessor)).subscribe(self.observer, scheduler=AsyncIOScheduler)
 
+        # Setup routes for order validation API and account query API
         self.app.router.add_get('/order', self.orderValidator, name='order')
         self.loop.create_task(self.rmqListener())
 
@@ -82,7 +85,7 @@ class AccountServices:
         self.messages.on_next(msg)
 
     def messageProcessor(self, message: IncomingMessage) -> Tuple[IncomingMessage, Engine, dict, asyncio.AbstractEventLoop]:
-        # Transform message into dictionary and pass object message for acknowledgement, DB engine, and asyncio loop to observer
+        # Transform message into dictionary and pass object message for acknowledgement, DB engine, the dictionary, and asyncio loop to observer
         data = message.body.decode()
         data = json.loads(data)
 
