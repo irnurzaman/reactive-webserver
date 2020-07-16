@@ -128,7 +128,7 @@ class OrderServices:
         return self.app
 
     # order API handler for handling order query
-    async def orderQuery(self, request: web.Request):
+    async def orderQuery(self, request: web.Request) -> web.Response:
         account = request.match_info['account']
         orders = []
         async for doc in self.orderCollection.find({'account': account}).sort('timestamp', -1):
