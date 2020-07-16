@@ -71,10 +71,15 @@ class AccountServices:
         self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
         self.rmqChannel = await self.rmqConn.channel()
         self.accountQueue = await self.rmqChannel.declare_queue('account', durable=True)
+
+        # Subscribes an observer for incoming account events
         self.disposable = self.messages.pipe(ops.map(self.messageProcessor)).subscribe(self.observer, scheduler=AsyncIOScheduler)
 
         # Setup routes for order validation API and account query API
         self.app.router.add_get('/order', self.orderValidator, name='order')
+        self.app.router.add_get('/accounts/{account}', self.accountQuery, name='account')
+
+        # Start listening to account events from RabbitMQ
         self.loop.create_task(self.rmqListener())
 
         return self.app
@@ -111,6 +116,21 @@ class AccountServices:
 
     def run(self):
         web.run_app(self.initializer(), port=8001)
+
+    # Account API handler for handling account query
+    async def accountQuery(self, request: web.Request) -> web.Response:
+        account = request.match_info['account']
+        rawSql = "SELECT * FROM accounts where account_no LIKE %s || '%%' ORDER BY account_no;"
+
+        results = []
+
+        async with self.dbEngine.acquire() as dbConn:
+            async for row in dbConn.execute(rawSql, account):
+                row = dict(row)
+                results.append(row)
+
+        return web.json_response({'results': results})
+
 
 if __name__ == '__main__':
     accountService = AccountServices()
