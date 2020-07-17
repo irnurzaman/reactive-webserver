@@ -166,7 +166,7 @@ class OrderServices:
                   'amount': order['price'] * order['vol'] if action == 'BUY' else order['vol']}
 
         # Check account availability to account services API
-        async with self.webservice.request('GET', 'http://localhost:8001/order', json=params) as resp:
+        async with self.webservice.request('POST', 'http://localhost:8001/order', json=params) as resp:
             valid = await resp.text()
             if valid == 'OK':
                 await self.orderCollection.insert_one(order)

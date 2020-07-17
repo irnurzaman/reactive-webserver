@@ -76,7 +76,7 @@ class AccountServices:
         self.disposable = self.messages.pipe(ops.map(self.messageProcessor)).subscribe(self.observer, scheduler=AsyncIOScheduler)
 
         # Setup routes for order validation API and account query API
-        self.app.router.add_get('/order', self.orderValidator, name='order')
+        self.app.router.add_post('/order', self.orderValidator, name='order')
         self.app.router.add_get('/accounts/{account}', self.accountQuery, name='account')
 
         # Start listening to account events from RabbitMQ
