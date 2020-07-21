@@ -1,0 +1,35 @@
+{
+  "order": {
+    "URL": "<gatewayUrl>/order",
+    "method": "POST",
+    "body": {
+      "client_ref": "OR95",
+      "action": "SELL/BUY",
+      "account": "<accountNo>",
+      "stock": "<stockCode>",
+      "price": 600,
+      "vol": 10
+    }
+  },
+  "orderlist query": {
+    "URL": "<gatewayUrl>/orders/<accountNo>",
+    "Method": "GET"
+  },
+
+  "account": {
+    "URL": "<gatewayUrl>/account",
+    "method": "POST",
+    "body": {
+      "client_ref": "AC95",
+      "action": "WITHDRAW/DEPOSIT",
+      "params": {
+        "account": "<accountNo>",
+        "amount": 1000000
+      }
+    }
+  },
+  "accountlist query": {
+    "URL": "<gatewayUrl>/accounts/<accountNo>",
+    "Method": "GET"
+  }
+}
