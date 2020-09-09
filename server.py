@@ -1,9 +1,12 @@
 # Built-in library
 import asyncio
 import logging
+import time
 
 # Third-party library
 import rx.operators as ops
+import prometheus_client
+from prometheus_client import Gauge, Histogram, Counter, CONTENT_TYPE_LATEST
 from rx.subject import Subject
 from rx.scheduler.eventloop import AsyncIOScheduler
 from aiohttp import web, ClientSession
@@ -58,22 +61,41 @@ class Webserver:
         return result
 
     async def accountQuery(self, request: web.Request) -> web.Response:
+        startTime = time.time()
+        self.app['REQUEST_PROGRESS'].labels(request.path, request.method).inc()
         account = request.match_info['account']
 
         response = {'results': []}
         async with self.webservice.get(f'http://localhost:8001/accounts/{account}') as resp:
             response = await resp.json()
 
+        latency = time.time() - startTime
+        self.app['REQUEST_LATENCY'].labels(request.path, request.method).observe(latency)
+        self.app['REQUEST_PROGRESS'].labels(request.path, request.method).dec()
+        self.app['REQUEST_COUNT'].labels(request.path, request.method).inc()
+
         return web.json_response(response)
 
     async def orderQuery(self, request: web.Request) -> web.Response:
+        startTime = time.time()
+        self.app['REQUEST_PROGRESS'].labels(request.path, request.method).inc()
         account = request.match_info['account']
 
         response = {'results': []}
         async with self.webservice.get(f'http://localhost:8002/orders/{account}') as resp:
             response = await resp.json()
 
+        latency = time.time() - startTime
+        self.app['REQUEST_LATENCY'].labels(request.path, request.method).observe(latency)
+        self.app['REQUEST_PROGRESS'].labels(request.path, request.method).dec()
+        self.app['REQUEST_COUNT'].labels(request.path, request.method).inc()
+
         return web.json_response(response)
+
+    async def metrics(self, request: web.Request) -> web.Response:
+        resp = web.Response(body=prometheus_client.generate_latest())
+        resp.content_type = CONTENT_TYPE_LATEST
+        return resp
 
     async def on_shutdown(self, app: web.Application):
         await self.rmqConn.close()
@@ -81,6 +103,10 @@ class Webserver:
 
 
     async def init(self):
+        self.app['REQUEST_COUNT'] = Counter('request_total', 'Total Incoming Request', ('path', 'method'), unit='requests')
+        self.app['REQUEST_LATENCY'] = Histogram('request_latency', 'Request Process Time', ('path', 'method'), unit='seconds')
+        self.app['REQUEST_PROGRESS'] = Gauge('request_progress', 'Request in Progress', ('path', 'method'), unit='requests')
+
         # Establish connection to RabbitMQ
         self.rmqConn = await connect_robust(login='ikhwanrnurzaman', password='123456')
 
@@ -112,6 +138,7 @@ class Webserver:
         self.app.router.add_get('/orders/{account}', self.orderQuery)
         self.app.router.add_post('/account', self.dispatcher, name='account')
         self.app.router.add_get('/accounts/{account}', self.accountQuery)
+        self.app.router.add_get('/metrics', self.metrics)
         self.app.on_shutdown.append(self.on_shutdown)
 
         return self.app
