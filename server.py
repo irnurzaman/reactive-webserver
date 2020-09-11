@@ -6,7 +6,7 @@ import time
 # Third-party library
 import rx.operators as ops
 import prometheus_client
-from prometheus_client import Gauge, Histogram, Counter, CONTENT_TYPE_LATEST
+from prometheus_client import Gauge, Summary, Counter, CONTENT_TYPE_LATEST
 from rx.subject import Subject
 from rx.scheduler.eventloop import AsyncIOScheduler
 from aiohttp import web, ClientSession
@@ -41,6 +41,8 @@ class Webserver:
 
     # General handler for dispatching request to every request observers
     async def dispatcher(self, request: web.Request) -> web.Response:
+        startTime = time.time()
+        self.app['REQUEST_PROGRESS'].labels(request.path, request.method).inc()
         future = asyncio.Future()
         request['future'] = future
         request['loop'] = self.loop
@@ -51,12 +53,19 @@ class Webserver:
             request['queue'] = request.path.replace('/','')
             request['channel'] = self.channel[request.path]
         except Exception as e:
+            self.app['REQUEST_PROGRESS'].labels(request.path, request.method).dec()
+            self.app['REQUEST_COUNT'].labels(request.path, request.method).inc()
             return web.json_response({'status':'FAIL', 'order_id': None, 'client_ref': None, 'reason':'Failed to parse request body'}, status=400)
 
         self.request.on_next(request) # Pass the request to the observers
 
         await future
         result = future.result() # Get the result response from the observers
+
+        latency = time.time() - startTime
+        self.app['REQUEST_LATENCY'].labels(request.path, request.method).observe(latency)
+        self.app['REQUEST_PROGRESS'].labels(request.path, request.method).dec()
+        self.app['REQUEST_COUNT'].labels(request.path, request.method).inc()
 
         return result
 
@@ -104,7 +113,7 @@ class Webserver:
 
     async def init(self):
         self.app['REQUEST_COUNT'] = Counter('request_total', 'Total Incoming Request', ('path', 'method'), unit='requests')
-        self.app['REQUEST_LATENCY'] = Histogram('request_latency', 'Request Process Time', ('path', 'method'), unit='seconds')
+        self.app['REQUEST_LATENCY'] = Summary('request_latency', 'Request Process Time', ('path', 'method'), unit='seconds')
         self.app['REQUEST_PROGRESS'] = Gauge('request_progress', 'Request in Progress', ('path', 'method'), unit='requests')
 
         # Establish connection to RabbitMQ
