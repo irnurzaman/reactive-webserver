@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Tuple
 from aiohttp import web
 from aiopg.sa import create_engine, Engine
@@ -8,6 +9,8 @@ import rx.operators as ops
 from rx.subject import Subject
 from rx.core import Observer
 from rx.scheduler.eventloop import AsyncIOScheduler
+import prometheus_client
+from prometheus_client import Counter, Summary, Gauge, CONTENT_TYPE_LATEST
 
 
 # Observer for handling incoming account events
@@ -40,11 +43,18 @@ class AccountHandler(Observer):
             data = message[2]
             action = data['action']
             params = data['params']
+            eventLatency = data['eventLatency']
+            eventTime = data['eventTime']
+            eventProgress = data['eventProgress']
 
             async with dbEngine.acquire() as dbConn:
                 await dbConn.execute(self.rawSql[action], self.params[action](params))
 
             qmsg.ack()
+
+            latency = time.time() - eventTime
+            eventLatency.labels(data['action']).observe(latency)
+            eventProgress.labels(data['action']).dec()
 
         loop.create_task(asyncAccount())
 
@@ -75,14 +85,24 @@ class AccountServices:
         # Subscribes an observer for incoming account events
         self.disposable = self.messages.pipe(ops.map(self.messageProcessor)).subscribe(self.observer, scheduler=AsyncIOScheduler)
 
+        self.app['EVENT_COUNTER'] = Counter('event_counter', 'Total Incoming Event', ('event',), unit='events')
+        self.app['EVENT_LATENCY'] = Summary('event_latency', 'Event Process Time', ('event',), unit='seconds')
+        self.app['EVENT_PROGRESS'] = Gauge('event_in_progress', 'Event in Progress', ('event',), unit='events')
+
         # Setup routes for order validation API and account query API
         self.app.router.add_post('/order', self.orderValidator, name='order')
         self.app.router.add_get('/accounts/{account}', self.accountQuery, name='account')
+        self.app.router.add_get('/metrics', self.metrics, name='metrics')
 
         # Start listening to account events from RabbitMQ
         self.loop.create_task(self.rmqListener())
 
         return self.app
+
+    async def metrics(self, request: web.Request) -> web.Response:
+        resp = web.Response(body=prometheus_client.generate_latest())
+        resp.content_type = CONTENT_TYPE_LATEST
+        return resp
 
     async def rmqListener(self):
         # Dispatch the consumed message to observer
@@ -95,10 +115,17 @@ class AccountServices:
         # Transform message into dictionary and pass object message for acknowledgement, DB engine, the dictionary, and asyncio loop to observer
         data = message.body.decode()
         data = json.loads(data)
+        self.app['EVENT_COUNTER'].labels(data['action']).inc()
+        self.app['EVENT_PROGRESS'].labels(data['action']).inc()
+        data['eventLatency'] = self.app['EVENT_LATENCY']
+        data['eventProgress'] = self.app['EVENT_PROGRESS']
+        data['eventTime'] = time.time()
 
         return (message, self.dbEngine, data, self.loop)
 
     async def orderValidator(self, request: web.Request) -> web.Response:
+        startNow = time.time()
+        self.app['EVENT_PROGRESS'].labels('ORDER-VALIDATION').inc()
         data = await request.json()
 
         account = data['account']
@@ -111,6 +138,11 @@ class AccountServices:
             async for row in dbConn.execute(rawSql, (amount, amount, account, amount)):
                 row = dict(row)
                 validation = 'OK' if row['validation'] else validation
+
+        latency = time.time() - startNow
+        self.app['EVENT_LATENCY'].labels('ORDER-VALIDATION').observe(latency)
+        self.app['EVENT_PROGRESS'].labels('ORDER-VALIDATION').dec()
+        self.app['EVENT_COUNTER'].labels('ORDER-VALIDATION').inc()
 
         return web.HTTPOk(text=validation)
 
