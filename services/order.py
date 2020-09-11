@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Tuple
 from aiohttp import web, ClientSession
@@ -8,6 +9,8 @@ from aio_pika import connect_robust, IncomingMessage, Message, DeliveryMode, Rob
 from rx.subject import Subject
 from rx.core import Observer
 from rx.scheduler.eventloop import AsyncIOScheduler
+import prometheus_client
+from prometheus_client import Counter, Summary, Gauge, CONTENT_TYPE_LATEST
 
 
 # Observer for matching any incoming order
@@ -26,9 +29,18 @@ class OrderMatcher(Observer):
             qmsg = message[0]
             order = message[1]
 
+            orderCounter = order['orderCounter']
+            orderCounter.labels(order['action'], order['stock'])
+
             await self.matchOrder(order)
 
             qmsg.ack()
+
+            latency = time.time() - order['eventTime']
+            eventLatency = order['eventLatency']
+            eventLatency.labels('ORDER', 'SUCCESS').observe(latency)
+            eventProgress = order['eventProgress']
+            eventProgress.labels('ORDER').dec()
 
         self.loop.create_task(asyncOrder())
 
@@ -108,6 +120,11 @@ class OrderServices:
         self.rmqChannel = None
 
     async def initializer(self):
+        self.app['EVENT_COUNTER'] = Counter('event_counter', 'Total Incoming Event', ('event', 'status'), unit='events')
+        self.app['ORDER_COUNTER'] = Counter('order_counter', 'Total Incoming Order', ('action', 'stock'), unit='events')
+        self.app['EVENT_LATENCY'] = Summary('event_latency', 'Event Process Time', ('event', 'status'), unit='seconds')
+        self.app['EVENT_PROGRESS'] = Gauge('event_in_progress', 'Event in Progress', ('event',), unit='events')
+
         # Creates a connection to MongoDB
         self.orderCollection = motor_asyncio.AsyncIOMotorClient('localhost', 27017)
         self.orderCollection = self.orderCollection.reactive.orders
@@ -125,8 +142,14 @@ class OrderServices:
 
         # Setup router for order API
         self.app.router.add_get('/orders/{account}', self.orderQuery, name='orders')
+        self.app.router.add_get('/metrics', self.metrics, name='metrics')
 
         return self.app
+
+    async def metrics(self, request: web.Request) -> web.Response:
+        resp = web.Response(body=prometheus_client.generate_latest())
+        resp.content_type = CONTENT_TYPE_LATEST
+        return resp
 
     # order API handler for handling order query
     async def orderQuery(self, request: web.Request) -> web.Response:
@@ -145,6 +168,8 @@ class OrderServices:
 
     # Validate orders by checking account availability
     async def orderValidation(self, msg: IncomingMessage):
+        startTime = time.time()
+        self.app['EVENT_PROGRESS'].labels('ORDER').inc()
         data = msg.body.decode()
         now = datetime.now()
         now = now.strftime('%Y-%m-%d %H:%M:%S')
@@ -170,13 +195,21 @@ class OrderServices:
         async with self.webservice.request('POST', 'http://localhost:8001/order', json=params) as resp:
             valid = await resp.text()
             if valid == 'OK':
+                self.app['EVENT_COUNTER'].labels('ORDER', 'SUCCESS').inc()
                 await self.orderCollection.insert_one(order)
+                order['eventLatency'] = self.app['EVENT_LATENCY']
+                order['eventProgress'] = self.app['EVENT_PROGRESS']
+                order['orderCounter'] = self.app['ORDER_COUNTER']
+                order['eventTime'] = startTime
                 self.messages.on_next((msg, order)) # Send valid order to order observable
             else:
+                self.app['EVENT_COUNTER'].labels('ORDER', 'FAIL').inc()
+                self.app['EVENT_PROGRESS'].labels('ORDER').dec()
                 order['status'] = 'R'
                 await self.orderCollection.insert_one(order)
                 msg.ack()
-
+                latency = time.time() - startTime
+                self.app['EVENT_LATENCY'].labels('ORDER', 'FAIL').observe(latency)
     def run(self):
         web.run_app(self.initializer(), port=8002)
 
