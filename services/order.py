@@ -73,7 +73,8 @@ class OrderMatcher(Observer):
                              'price': orderContra['price'], 'vol': contraMatchVol}
                 self.tradeNotif.on_next(tradeContra)
 
-                orderContra = await self.collection.find_one_and_update(dictFilter,{'$set':{'selected': True}},sort=list(dictSort.items()), return_document=True)
+                if order['status'] != '2':
+                    orderContra = await self.collection.find_one_and_update(dictFilter,{'$set':{'selected': True}},sort=list(dictSort.items()), return_document=True)
 
             await self.collection.find_one_and_update({'orderId': order['orderId']},
                                                  {'$set': {'selected': False}})
